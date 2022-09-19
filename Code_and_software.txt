@@ -1,0 +1,81 @@
+#### This document contains all the code necessary to follow the approach described in the manuscript both for 10X and Smartseq2 scRNAseq data ####
+
+### Download GRCm38 genome cDNA sequence assembly, concatenate TE sequences and build index 
+
+wget ftp://ftp.ensembl.org/pub/release-96/fasta/mus_musculus/cdna/Mus_musculus.GRCm38.cdna.all.fa.gz
+
+gzip -d Mus_musculus.GRCm38.cdna.all.fa.gz
+
+cat Mus_musculus.GRCm38.cdna.all.fa repbase_extract_mus_musculus.fa > Mus_musculus.GRCm38.cdna.all_TEs.fa
+
+kallisto index -i Mus_musculus.GRCm38.cdna.all_TEs.index Mus_musculus.GRCm38.cdna.all_TEs.fa
+
+### 10X scRNAseq data ###
+
+### Kallisto pseudoalignment:
+
+kallisto bus -i Mus_musculus.GRCm38.cdna.all_TEs.index -o Kallisto -x 10xv2 _R1.fastq.gz _R2.fastq.gz 
+
+### Processing the bus files:
+
+1. bustools sort -T /tmp -o ./output.sorted ./output.bus
+2. bustools text -o ./output_sorted.txt ./output.sorted
+
+### Generate sparse matrices for R analysis
+
+Following: https://bustools.github.io/BUS_notebooks_R/10xv3.html
+
+### Smartseq2 scRNAseq data ###
+
+### Kallisto pseudoalignment for paired-end scRNAseq FASTQs:
+
+kallisto pseudo --quant -i Mus_musculus.GRCm38.cdna.all_TEs.index -o Kallisto -b batch.txt
+
+### Structure of batch.txt file is:
+### #id file1 file 2
+### cell1 cell1_R1.fastq.gz cell1_R2.fastq.gz
+### cell2 cell2_R1.fastq.gz cell2_R2.fastq.gz
+### cell3 cell3_R1.fastq.gz cell3_R2.fastq.gz
+### ...
+
+### The --quant command will generate an RNA count matrix of cells (rows) by genes(columns) in H5AD format
+### The following python script was used to make adata.h5ad object
+
+#!/usr/bin/env python3
+import sys
+import numpy as np
+from scipy.io import mmread
+import anndata
+import pandas as pd
+import argparse
+
+def main(matrix, cells, transcripts):
+    COOmatrix = mmread(matrix)
+    CSRmatrix = COOmatrix.tocsr()
+    rows = pd.read_csv(cells, header=None, names=["cell_id"])
+    cols = pd.read_csv(transcripts, header=None, names=["transcript_id", "gene_id", "gene_name"], sep="\t")
+    adata = anndata.AnnData(X=CSRmatrix, obs=rows, var=cols)
+
+    return adata
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser(description="Converts kallisto pseudo --quant for SMARTseq to adata.h5ad")
+    p.add_argument('-m', action="store", dest="matrix", help="matrix abundance file" )
+    p.add_argument('-c', action="store", dest="cells", help="cells file" )
+    p.add_argument('-t', action="store", dest="transcripts", help="transcripts file" )
+
+    p.add_argument("--outdir", help="path to save adata.h5ad", default="./")
+
+    args = p.parse_args()
+
+    adata = main(args.matrix, args.cells, args.transcripts)
+    adata.write(args.outdir + "adata.h5ad")
+
+### The adata.h5ad object was converted into a Seurat object in R
+
+Convert("adata.h5ad", dest = "h5seurat", overwrite = TRUE)
+Marrow_3m_Smartseq2 <- LoadH5Seurat("adata.h5seurat") 
+
+
+
+
